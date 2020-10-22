@@ -15,7 +15,7 @@ use crate::kb::*;
 use crate::lexer::loc_to_pos;
 use crate::messages::*;
 use crate::numerics::*;
-use crate::partial;
+use crate::partial::{save_damned, simplify_bindings, Constraints};
 use crate::rewrites::Renamer;
 use crate::rules::*;
 use crate::runnable::Runnable;
@@ -812,13 +812,15 @@ impl PolarVirtualMachine {
                 None => return self.push_goal(Goal::Halt),
                 Some(Choice {
                     mut alternatives,
-                    bsp,
+                    mut bsp,
                     goals,
                     queries,
                     trace,
                     trace_stack,
                 }) => {
-                    self.bindings.truncate(bsp);
+                    let damned = self.bindings.drain(bsp..).collect();
+                    let saved = save_damned(damned, &mut self.bindings);
+                    bsp += saved;
                     if let Some(mut alternative) = alternatives.pop() {
                         if alternatives.is_empty() {
                             self.goals = goals;
@@ -840,6 +842,12 @@ impl PolarVirtualMachine {
                             })
                         }
                         self.goals.append(&mut alternative);
+                        break;
+                    } else if saved > 0 {
+                        self.goals = goals;
+                        self.queries = queries;
+                        self.trace = trace;
+                        self.trace_stack = trace_stack;
                         break;
                     }
                 }
@@ -2025,7 +2033,7 @@ impl PolarVirtualMachine {
 
     /// Unify a partial `left` with a term `right`.
     /// This is sort of a "sub-goal" of `Unify`.
-    fn unify_partial(&mut self, partial: &partial::Constraints, right: &Term) -> PolarResult<()> {
+    fn unify_partial(&mut self, partial: &Constraints, right: &Term) -> PolarResult<()> {
         let mut partial = partial.clone();
         if matches!(right.value(), Value::Partial(_)) {
             return Err(self.set_error_context(
@@ -2577,7 +2585,8 @@ impl Runnable for PolarVirtualMachine {
             None
         };
 
-        let bindings = partial::simplify_bindings(self.bindings(true));
+        // TODO: Do we need temps in the bindings below?
+        let bindings = simplify_bindings(self.bindings(true));
 
         Ok(QueryEvent::Result { bindings, trace })
     }

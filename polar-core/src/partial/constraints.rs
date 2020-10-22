@@ -3,8 +3,10 @@ use serde::{Deserialize, Serialize};
 use crate::counter::Counter;
 use crate::error::{OperationalError, PolarResult};
 use crate::events::QueryEvent;
+use crate::folder::Folder;
 use crate::runnable::Runnable;
 use crate::terms::{Operation, Operator, Pattern, Symbol, Term, Value};
+use crate::vm::{Binding, BindingStack};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct Constraints {
@@ -14,7 +16,7 @@ pub struct Constraints {
 
 impl Constraints {
     pub fn new(variable: Symbol) -> Self {
-        Constraints {
+        Self {
             operations: vec![],
             variable,
         }
@@ -117,6 +119,64 @@ impl Constraints {
     fn variable_term(&self) -> Term {
         Term::new_temporary(Value::Variable(sym!("_this")))
     }
+}
+
+/// For each damned binding, save it if it has a constraint attached.
+pub fn save_damned(damned: BindingStack, bindings: &mut BindingStack) -> usize {
+    struct Save;
+    impl Folder for Save {
+        fn fold_operation(&mut self, o: Operation) -> Operation {
+            Operation {
+                operator: match o.operator {
+                    Operator::And => Operator::Or,
+                    Operator::Or => Operator::And,
+                    Operator::Unify | Operator::Eq => Operator::Neq,
+                    Operator::Neq => Operator::Unify,
+                    Operator::Gt => Operator::Leq,
+                    Operator::Geq => Operator::Lt,
+                    Operator::Lt => Operator::Geq,
+                    Operator::Leq => Operator::Gt,
+                    _ => todo!("negate {:?}", o.operator),
+                },
+                args: self.fold_list(o.args),
+            }
+        }
+
+        fn fold_constraints(&mut self, c: Constraints) -> Constraints {
+            Constraints {
+                variable: c.variable,
+                operations: vec![Operation {
+                    operator: Operator::Or,
+                    args: c
+                        .operations
+                        .into_iter()
+                        .map(|o| Term::new_temporary(Value::Expression(self.fold_operation(o))))
+                        .collect(),
+                }],
+            }
+        }
+    }
+
+    let mut save = Save {};
+    let saved = damned
+        .into_iter()
+        .filter_map(|Binding(var, value)| match value.value() {
+            // FIXME: We should chase each partial's variable
+            // up the binding chain, and preserve only those.
+            Value::Partial(c) if !c.operations.is_empty() => Some(Binding(
+                var,
+                value.clone_with_value(Value::Partial(save.fold_constraints(c.clone()))),
+            )),
+            Value::Variable(_) => Some(Binding(var, value)),
+            _ => None,
+        })
+        .collect::<BindingStack>();
+
+    let len = saved.len();
+    for binding in saved {
+        bindings.push(binding);
+    }
+    len
 }
 
 #[derive(Clone)]
@@ -233,7 +293,7 @@ mod test {
             assert_eq!(
                 $bindings
                     .get(&sym!($sym))
-                    .unwrap()
+                    .expect(&format!("{} is unbound", $sym))
                     .value()
                     .as_expression()
                     .unwrap()
@@ -530,13 +590,33 @@ mod test {
     #[test]
     fn test_not_partial() -> TestResult {
         let polar = Polar::new();
-        polar.load_str(r#"f(x) if not x = 1;"#)?;
+        polar.load_str(
+            r#"f(x) if not x = 1;
+               g(x) if not x > 1;
+               h(x) if not (x = 1 and x = 2);
+               i(x) if not (x = 1 or x = 2);"#,
+        )?;
+
         let mut query =
             polar.new_query_from_term(term!(call!("f", [Constraints::new(sym!("a"))])), false);
-        // let error = query.next_event().unwrap_err();
-        eprintln!("{:?}", query.next_event());
-        // assert!(matches!(error, PolarError {
-        //     kind: ErrorKind::Runtime(RuntimeError::TypeError { .. }), ..}));
+        let next = next_binding(&mut query)?;
+        assert_partial_expression!(next, "a", "_this != 1");
+
+        let mut query =
+            polar.new_query_from_term(term!(call!("g", [Constraints::new(sym!("a"))])), false);
+        let next = next_binding(&mut query)?;
+        assert_partial_expression!(next, "a", "_this <= 1");
+
+        let mut query =
+            polar.new_query_from_term(term!(call!("h", [Constraints::new(sym!("a"))])), false);
+        let next = next_binding(&mut query)?;
+        assert_partial_expression!(next, "a", "_this != 1 or _this != 2");
+
+        let mut query =
+            polar.new_query_from_term(term!(call!("i", [Constraints::new(sym!("a"))])), false);
+        let next = next_binding(&mut query)?;
+        assert_partial_expression!(next, "a", "_this != 1 and _this != 2");
+
         Ok(())
     }
 
