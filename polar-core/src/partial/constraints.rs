@@ -528,6 +528,19 @@ mod test {
     }
 
     #[test]
+    fn test_not_partial() -> TestResult {
+        let polar = Polar::new();
+        polar.load_str(r#"f(x) if not x = 1;"#)?;
+        let mut query =
+            polar.new_query_from_term(term!(call!("f", [Constraints::new(sym!("a"))])), false);
+        // let error = query.next_event().unwrap_err();
+        eprintln!("{:?}", query.next_event());
+        // assert!(matches!(error, PolarError {
+        //     kind: ErrorKind::Runtime(RuntimeError::TypeError { .. }), ..}));
+        Ok(())
+    }
+
+    #[test]
     fn test_trivial_partials() -> TestResult {
         let polar = Polar::new();
         polar.load_str(
