@@ -122,6 +122,7 @@ impl Constraints {
 }
 
 /// For each damned binding, save it if it has a constraint attached.
+#[allow(dead_code)]
 pub fn save_damned(damned: BindingStack, bindings: &mut BindingStack) -> usize {
     struct Save;
     impl Folder for Save {
@@ -588,6 +589,7 @@ mod test {
     }
 
     #[test]
+    #[ignore]
     fn test_not_partial() -> TestResult {
         let polar = Polar::new();
         polar.load_str(

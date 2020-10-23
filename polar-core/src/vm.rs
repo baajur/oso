@@ -11,11 +11,12 @@ use crate::error::{self, PolarResult};
 use crate::events::*;
 use crate::folder::{fold_term, Folder};
 use crate::formatting::ToPolarString;
+use crate::inverter::Inverter;
 use crate::kb::*;
 use crate::lexer::loc_to_pos;
 use crate::messages::*;
 use crate::numerics::*;
-use crate::partial::{save_damned, simplify_bindings, Constraints};
+use crate::partial::{simplify_bindings, Constraints};
 use crate::rewrites::Renamer;
 use crate::rules::*;
 use crate::runnable::Runnable;
@@ -170,6 +171,7 @@ impl std::ops::DerefMut for GoalStack {
 
 pub type Queries = TermList;
 
+#[derive(Clone)]
 pub struct PolarVirtualMachine {
     /// Stacks.
     pub goals: GoalStack,
@@ -235,7 +237,7 @@ impl PolarVirtualMachine {
     /// Reverse the goal list for the sanity of callers.
     pub fn new(
         kb: Arc<RwLock<KnowledgeBase>>,
-        trace: bool,
+        tracing: bool,
         goals: Goals,
         messages: MessageQueue,
     ) -> Self {
@@ -253,7 +255,7 @@ impl PolarVirtualMachine {
             csp: 0,
             choices: vec![],
             queries: vec![],
-            tracing: trace,
+            tracing,
             trace_stack: vec![],
             trace: vec![],
             external_error: None,
@@ -269,8 +271,12 @@ impl PolarVirtualMachine {
         vm
     }
 
-    pub fn new_test(kb: Arc<RwLock<KnowledgeBase>>, trace: bool, goals: Goals) -> Self {
-        PolarVirtualMachine::new(kb, trace, goals, MessageQueue::new())
+    pub fn new_test(kb: Arc<RwLock<KnowledgeBase>>, tracing: bool, goals: Goals) -> Self {
+        PolarVirtualMachine::new(kb, tracing, goals, MessageQueue::new())
+    }
+
+    pub fn clone_with_bindings(&self, goals: Goals) -> Self {
+        Self::new(self.kb.clone(), self.tracing, goals, self.messages.clone())
     }
 
     #[cfg(test)]
@@ -812,15 +818,13 @@ impl PolarVirtualMachine {
                 None => return self.push_goal(Goal::Halt),
                 Some(Choice {
                     mut alternatives,
-                    mut bsp,
+                    bsp,
                     goals,
                     queries,
                     trace,
                     trace_stack,
                 }) => {
-                    let damned = self.bindings.drain(bsp..).collect();
-                    let saved = save_damned(damned, &mut self.bindings);
-                    bsp += saved;
+                    self.bindings.truncate(bsp);
                     if let Some(mut alternative) = alternatives.pop() {
                         if alternatives.is_empty() {
                             self.goals = goals;
@@ -842,12 +846,6 @@ impl PolarVirtualMachine {
                             })
                         }
                         self.goals.append(&mut alternative);
-                        break;
-                    } else if saved > 0 {
-                        self.goals = goals;
-                        self.queries = queries;
-                        self.trace = trace;
-                        self.trace_stack = trace_stack;
                         break;
                     }
                 }
@@ -1356,9 +1354,10 @@ impl PolarVirtualMachine {
                 // Push a choice point that queries for the term; if the query succeeds cut and backtrack
                 assert_eq!(args.len(), 1);
                 let term = args.pop().unwrap();
+                let inverter = Box::new(Inverter::new(self, vec![Goal::Query { term }]));
                 let alternatives = vec![
                     vec![
-                        Goal::Query { term },
+                        Goal::Run { runnable: inverter },
                         Goal::Cut {
                             choice_index: self.choices.len(),
                         },
@@ -2651,7 +2650,8 @@ impl Runnable for PolarVirtualMachine {
     }
 
     fn clone_runnable(&self) -> Box<dyn Runnable> {
-        unimplemented!("Make Goal::Run take a closure Fn -> Runnable");
+        Box::new(self.clone())
+        // unimplemented!("Make Goal::Run take a closure Fn -> Runnable");
     }
 }
 
