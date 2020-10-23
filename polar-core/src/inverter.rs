@@ -1,6 +1,7 @@
 use crate::counter::Counter;
 use crate::error::PolarResult;
 use crate::events::QueryEvent;
+use crate::kb::Bindings;
 use crate::runnable::Runnable;
 use crate::terms::Term;
 use crate::vm::{Goals, PolarVirtualMachine};
@@ -8,23 +9,33 @@ use crate::vm::{Goals, PolarVirtualMachine};
 #[derive(Clone)]
 pub struct Inverter {
     vm: PolarVirtualMachine,
+    results: Vec<Bindings>, // FIXME: no traces.
 }
 
 impl Inverter {
     pub fn new(vm: &PolarVirtualMachine, goals: Goals) -> Self {
         Self {
             vm: vm.clone_with_bindings(goals),
+            results: vec![],
         }
     }
 }
 
 impl Runnable for Inverter {
     fn run(&mut self, counter: Counter) -> PolarResult<QueryEvent> {
-        self.vm.run(counter).map(|r| dbg!(r)).map(|r| match r {
-            QueryEvent::Done { .. } => QueryEvent::Done { result: true },
-            QueryEvent::Result { .. } => QueryEvent::Done { result: false },
-            event => event,
-        })
+        loop {
+            // Pass most events through, but collect results and invert them.
+            // FIXME: counter clone
+            if let Ok(event) = self.vm.run(counter.clone()) {
+                match event {
+                    QueryEvent::Done { .. } => {
+                        return Ok(QueryEvent::Done { result: self.results.is_empty() });
+                    }
+                    QueryEvent::Result { bindings, .. } => self.results.push(bindings),
+                    event => return Ok(event),
+                }
+            }
+        }
     }
 
     fn external_question_result(&mut self, call_id: u64, answer: bool) -> PolarResult<()> {
