@@ -276,7 +276,9 @@ impl PolarVirtualMachine {
     }
 
     pub fn clone_with_bindings(&self, goals: Goals) -> Self {
-        Self::new(self.kb.clone(), self.tracing, goals, self.messages.clone())
+        let mut vm = Self::new(self.kb.clone(), self.tracing, goals, self.messages.clone());
+        vm.bindings.clone_from(&self.bindings);
+        vm
     }
 
     #[cfg(test)]
@@ -1355,17 +1357,11 @@ impl PolarVirtualMachine {
                 assert_eq!(args.len(), 1);
                 let term = args.pop().unwrap();
                 let inverter = Box::new(Inverter::new(self, vec![Goal::Query { term }]));
-                let alternatives = vec![
-                    vec![
-                        Goal::Run { runnable: inverter },
-                        Goal::Cut {
-                            choice_index: self.choices.len(),
-                        },
-                        Goal::Backtrack,
-                    ],
+                self.choose_conditional(
+                    vec![Goal::Run { runnable: inverter }],
                     vec![Goal::Noop],
-                ];
-                self.choose(alternatives)?;
+                    vec![Goal::Backtrack],
+                )?;
             }
             Operator::Assign => {
                 assert_eq!(args.len(), 2);

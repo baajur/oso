@@ -20,8 +20,9 @@ impl Inverter {
 
 impl Runnable for Inverter {
     fn run(&mut self, counter: Counter) -> PolarResult<QueryEvent> {
-        self.vm.run(counter).map(|r| match r {
-            QueryEvent::Done { result } => QueryEvent::Done { result: !result },
+        self.vm.run(counter).map(|r| dbg!(r)).map(|r| match r {
+            QueryEvent::Done { .. } => QueryEvent::Done { result: true },
+            QueryEvent::Result { .. } => QueryEvent::Done { result: false },
             event => event,
         })
     }
