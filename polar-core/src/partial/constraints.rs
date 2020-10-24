@@ -242,7 +242,8 @@ impl Runnable for IsaConstraintCheck {
     fn run(
         &mut self,
         _: Option<&mut BindingStack>,
-        counter: &mut Counter,
+        _: Option<&mut usize>,
+        counter: Option<&mut Counter>,
     ) -> PolarResult<QueryEvent> {
         if self.proposed_tag.is_none() {
             return Ok(QueryEvent::Done { result: true });
@@ -254,6 +255,7 @@ impl Runnable for IsaConstraintCheck {
             }
         }
 
+        let counter = counter.expect("IsaConstraintCheck requires a Counter");
         loop {
             let next = self.existing.pop();
             if let Some(constraint) = next {
@@ -604,24 +606,23 @@ mod test {
 
         let mut query =
             polar.new_query_from_term(term!(call!("f", [Constraints::new(sym!("a"))])), false);
-        eprintln!("{:?}", query.next_event());
-        // let next = next_binding(&mut query)?;
-        // assert_partial_expression!(next, "a", "_this != 1");
-        //
-        // let mut query =
-        //     polar.new_query_from_term(term!(call!("g", [Constraints::new(sym!("a"))])), false);
-        // let next = next_binding(&mut query)?;
-        // assert_partial_expression!(next, "a", "_this <= 1");
-        //
-        // let mut query =
-        //     polar.new_query_from_term(term!(call!("h", [Constraints::new(sym!("a"))])), false);
-        // let next = next_binding(&mut query)?;
-        // assert_partial_expression!(next, "a", "_this != 1 or _this != 2");
-        //
-        // let mut query =
-        //     polar.new_query_from_term(term!(call!("i", [Constraints::new(sym!("a"))])), false);
-        // let next = next_binding(&mut query)?;
-        // assert_partial_expression!(next, "a", "_this != 1 and _this != 2");
+        let next = next_binding(&mut query)?;
+        assert_partial_expression!(next, "a", "_this != 1");
+
+        let mut query =
+            polar.new_query_from_term(term!(call!("g", [Constraints::new(sym!("a"))])), false);
+        let next = next_binding(&mut query)?;
+        assert_partial_expression!(next, "a", "_this <= 1");
+
+        let mut query =
+            polar.new_query_from_term(term!(call!("h", [Constraints::new(sym!("a"))])), false);
+        let next = next_binding(&mut query)?;
+        assert_partial_expression!(next, "a", "_this != 1 or _this != 2");
+
+        let mut query =
+            polar.new_query_from_term(term!(call!("i", [Constraints::new(sym!("a"))])), false);
+        let next = next_binding(&mut query)?;
+        assert_partial_expression!(next, "a", "_this != 1 and _this != 2");
 
         Ok(())
     }

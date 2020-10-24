@@ -1,74 +1,118 @@
 use crate::counter::Counter;
 use crate::error::PolarResult;
 use crate::events::QueryEvent;
-use crate::kb::Bindings;
+use crate::folder::Folder;
+use crate::partial::Constraints;
 use crate::runnable::Runnable;
-use crate::terms::Term;
-use crate::vm::{BindingStack, Goals, PolarVirtualMachine};
+use crate::terms::{Operation, Operator, Term, Value};
+use crate::vm::{Binding, BindingStack, Goals, PolarVirtualMachine};
 
 #[derive(Clone)]
 pub struct Inverter {
     vm: PolarVirtualMachine,
-    results: Vec<Bindings>, // FIXME: no traces.
+    result: bool,
 }
 
 impl Inverter {
     pub fn new(vm: &PolarVirtualMachine, goals: Goals) -> Self {
         Self {
             vm: vm.clone_with_bindings(goals),
-            results: vec![],
+            result: true,
         }
     }
 }
 
+struct ConstraintInverter {
+    pub new_bindings: BindingStack,
+}
+
+impl ConstraintInverter {
+    pub fn new() -> Self {
+        Self {
+            new_bindings: vec![],
+        }
+    }
+}
+
+impl Folder for ConstraintInverter {
+    fn fold_operation(&mut self, o: Operation) -> Operation {
+        Operation {
+            operator: match o.operator {
+                Operator::And => Operator::Or,
+                Operator::Or => Operator::And,
+                Operator::Unify | Operator::Eq => Operator::Neq,
+                Operator::Neq => Operator::Unify,
+                Operator::Gt => Operator::Leq,
+                Operator::Geq => Operator::Lt,
+                Operator::Lt => Operator::Geq,
+                Operator::Leq => Operator::Gt,
+                _ => todo!("negate {:?}", o.operator),
+            },
+            args: self.fold_list(o.args),
+        }
+    }
+
+    // If there are any constraints to invert, invert 'em.
+    fn fold_constraints(&mut self, c: Constraints) -> Constraints {
+        if !c.operations.is_empty() {
+            let new_binding = Binding(
+                c.variable.clone(),
+                Term::new_temporary(Value::Partial(Constraints {
+                    variable: c.variable.clone(),
+                    operations: vec![Operation {
+                        operator: Operator::Or,
+                        args: c
+                            .operations
+                            .iter()
+                            .cloned()
+                            .map(|o| Term::new_temporary(Value::Expression(self.fold_operation(o))))
+                            .collect(),
+                    }],
+                })),
+            );
+            self.new_bindings.push(new_binding);
+        }
+        c
+    }
+}
+
+/// If there are no partials, and you get no results, return true
+/// If there are no partials, and you get at least one result, return false
+/// If there's a partial, return `true` with the partial.
+///     - what if the partial has no operations?
 impl Runnable for Inverter {
     fn run(
         &mut self,
         bindings: Option<&mut BindingStack>,
-        mut counter: &mut Counter,
+        bsp: Option<&mut usize>,
+        _: Option<&mut Counter>,
     ) -> PolarResult<QueryEvent> {
-        eprintln!("[Inverter] BEFORE RUN: {:?}\n", bindings);
-
         loop {
             // Pass most events through, but collect results and invert them.
-            if let Ok(event) = self.vm.run(None, &mut counter) {
+            if let Ok(event) = self.vm.run(None, None, None) {
                 match event {
                     QueryEvent::Done { .. } => {
-                        eprintln!("[Inverter] DONE - RESULTS: {:?}\n", self.results);
-                        eprintln!("[Inverter] DONE - returning: {}\n", self.results.is_empty());
-
-                        let result = !self.results.is_empty();
-
-                        eprintln!("[Inverter] AFTER RUN: {:?}\n", bindings);
-
-                        let x = if let Some(parent_bindings) = bindings {
-                            // let inverter_bindings = self.results.drain(..).flat_map(|bindings| {
-                            //     bindings
-                            //         .into_iter()
-                            //         .map(|(k, v)| Binding(k, v))
-                            //         .collect::<BindingStack>()
-                            // });
-                            // parent_bindings.extend(inverter_bindings);
-
-                            parent_bindings.clear();
-                            parent_bindings.extend(self.vm.bindings.drain(..));
-                            parent_bindings.clone()
-                        } else {
-                            vec![]
-                        };
-
-                        eprintln!("[Inverter] AFTER MOVE: {:?}\n", x);
-
-                        return Ok(QueryEvent::Done { result });
+                        if !self.result {
+                            if let Some(parent_bindings) = bindings {
+                                let bsp = bsp.expect("Inverter needs a BSP");
+                                let mut inverter = ConstraintInverter::new();
+                                self.vm
+                                    .bindings
+                                    .drain(*bsp..)
+                                    .for_each(|Binding(_, value)| {
+                                        inverter.fold_term(value);
+                                    });
+                                self.result = !inverter.new_bindings.is_empty();
+                                *bsp += inverter.new_bindings.len();
+                                parent_bindings.extend(inverter.new_bindings);
+                            }
+                        }
+                        return Ok(QueryEvent::Done {
+                            result: self.result,
+                        });
                     }
-                    QueryEvent::Result { bindings, .. } => {
-                        eprintln!("[Inverter] RESULT - BINDINGS: {:?}\n", bindings);
-                        self.results.push(bindings);
-                    }
-                    event => {
-                        eprintln!("[Inverter] {:?}\n", event);
-                        return Ok(event);
-                    }
+                    QueryEvent::Result { .. } => self.result = false,
+                    event => return Ok(event),
                 }
             }
         }

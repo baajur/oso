@@ -15,7 +15,8 @@ pub trait Runnable {
     fn run(
         &mut self,
         bindings: Option<&mut BindingStack>,
-        counter: &mut Counter,
+        bsp: Option<&mut usize>,
+        counter: Option<&mut Counter>,
     ) -> PolarResult<QueryEvent>;
 
     fn external_question_result(&mut self, _call_id: u64, _answer: bool) -> PolarResult<()> {
