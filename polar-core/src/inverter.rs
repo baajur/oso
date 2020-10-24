@@ -1,3 +1,5 @@
+use std::collections::hash_map::Entry;
+
 use crate::counter::Counter;
 use crate::error::PolarResult;
 use crate::events::QueryEvent;
@@ -93,32 +95,68 @@ impl Runnable for Inverter {
             if let Ok(event) = self.vm.run(None, None, None) {
                 match event {
                     QueryEvent::Done { .. } => {
-                        if !self.results.is_empty() {
+                        let result = !self.results.is_empty();
+                        if result {
                             eprintln!("{:?}", self.results);
-                            let inverted_results = self.results.into_iter().map(|result| {
-                                let mut inverter = ConstraintInverter::new();
-                                result.into_iter().for_each(|Binding(_, value)| {
-                                    inverter.fold_term(value);
-                                });
-                            });
+                            let new_bindings: BindingStack = self
+                                .results
+                                .iter()
+                                .map(|result| {
+                                    let mut inverter = ConstraintInverter::new();
+                                    result.iter().for_each(|(_, value)| {
+                                        inverter.fold_term(value.clone());
+                                    });
+                                    inverter.new_bindings
+                                })
+                                .fold(Bindings::new(), |mut acc, bindings| {
+                                    for Binding(var, value) in bindings {
+                                        match acc.entry(var) {
+                                            Entry::Occupied(mut o) => {
+                                                let existing = o.get();
+                                                if let Value::Partial(existing) = existing.value() {
+                                                    if let Ok(new) = value.value().as_partial() {
+                                                        assert_eq!(existing.variable, new.variable);
+                                                        let conjunction = value.clone_with_value(
+                                                            Value::Partial(Constraints {
+                                                                variable: existing.variable.clone(),
+                                                                operations: existing
+                                                                    .operations
+                                                                    .iter()
+                                                                    .cloned()
+                                                                    .chain(
+                                                                        new.operations
+                                                                            .iter()
+                                                                            .cloned(),
+                                                                    )
+                                                                    .collect(),
+                                                            }),
+                                                        );
+                                                        o.insert(conjunction);
+                                                    } else {
+                                                        unreachable!();
+                                                    }
+                                                } else {
+                                                    unreachable!();
+                                                }
+                                            }
+                                            Entry::Vacant(v) => {
+                                                v.insert(value);
+                                            }
+                                        }
+                                    }
+                                    acc
+                                })
+                                .drain()
+                                .map(|(var, value)| Binding(var, value))
+                                .collect();
 
                             if let Some(parent_bindings) = bindings {
                                 let bsp = bsp.expect("Inverter needs a BSP");
-                                let mut inverter = ConstraintInverter::new();
-                                self.vm
-                                    .bindings
-                                    .drain(*bsp..)
-                                    .for_each(|Binding(_, value)| {
-                                        inverter.fold_term(value);
-                                    });
-                                self.result = !inverter.new_bindings.is_empty();
-                                *bsp += inverter.new_bindings.len();
-                                parent_bindings.extend(inverter.new_bindings);
+                                *bsp += new_bindings.len();
+                                parent_bindings.extend(new_bindings);
                             }
                         }
-                        return Ok(QueryEvent::Done {
-                            result: self.result,
-                        });
+                        return Ok(QueryEvent::Done { result });
                     }
                     QueryEvent::Result { bindings, .. } => {
                         self.results.push(bindings);
