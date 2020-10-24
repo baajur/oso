@@ -63,15 +63,18 @@ pub enum Goal {
         call_id: u64,
         instance: Term,
         field: Term,
-        check_errors: bool,
+    },
+    IsaExternal {
+        instance: Term,
+        literal: InstanceLiteral,
     },
     MakeExternal {
         constructor: Term,
         instance_id: u64,
     },
-    IsaExternal {
-        instance: Term,
-        literal: InstanceLiteral,
+    NextExternal {
+        call_id: u64,
+        term: Term,
     },
     UnifyExternal {
         left_instance_id: u64,
@@ -324,8 +327,7 @@ impl PolarVirtualMachine {
                 call_id,
                 instance,
                 field,
-                check_errors,
-            } => return self.lookup_external(*call_id, instance, field, *check_errors),
+            } => return self.lookup_external(*call_id, instance, field),
             Goal::IsaExternal { instance, literal } => return self.isa_external(instance, literal),
             Goal::UnifyExternal {
                 left_instance_id,
@@ -335,6 +337,7 @@ impl PolarVirtualMachine {
                 constructor,
                 instance_id,
             } => return Ok(self.make_external(constructor, *instance_id)),
+            Goal::NextExternal { call_id, term } => return self.next_external(*call_id, term),
             Goal::CheckError => return self.check_error(),
             Goal::Noop => {}
             Goal::Query { term } => {
@@ -943,7 +946,6 @@ impl PolarVirtualMachine {
                         instance: left.clone(),
                         call_id,
                         field: right_value.clone_with_value(Value::String(field.0.clone())),
-                        check_errors: false,
                     };
                     let isa = Goal::Isa {
                         left: left.clone_with_value(Value::Variable(left_value)),
@@ -1115,7 +1117,6 @@ impl PolarVirtualMachine {
         call_id: u64,
         instance: &Term,
         field: &Term,
-        check_errors: bool,
     ) -> PolarResult<QueryEvent> {
         let (field_name, args, kwargs): (
             Symbol,
@@ -1144,16 +1145,9 @@ impl PolarVirtualMachine {
             }
         };
 
-        self.push_choice(vec![vec![Goal::LookupExternal {
-            call_id,
-            instance: instance.clone(),
-            field: field.clone(),
-            check_errors,
-        }]]);
-
-        if check_errors {
-            self.push_goal(Goal::CheckError)?;
-        }
+        // add an empty choice point; lookups return only one value
+        // but we'll want to cut if we get back nothing
+        self.push_choice(vec![]);
 
         self.log_with(
             || {
@@ -1203,6 +1197,19 @@ impl PolarVirtualMachine {
             call_id,
             instance: self.deep_deref(instance),
             class_tag: literal.tag.clone(),
+        })
+    }
+
+    pub fn next_external(&mut self, call_id: u64, term: &Term) -> PolarResult<QueryEvent> {
+        // add another choice point for the next result
+        self.push_choice(vec![vec![Goal::NextExternal {
+            call_id,
+            term: term.clone(),
+        }]]);
+
+        Ok(QueryEvent::Next {
+            call_id,
+            term: term.clone(),
         })
     }
 
@@ -1431,6 +1438,27 @@ impl PolarVirtualMachine {
                                 .collect::<Vec<Goals>>(),
                         )?;
                     }
+                    // Push an `ExternalLookup` goal for external instances and built-ins.
+                    Value::Dictionary(_) | Value::ExternalInstance(_) | Value::String(_) => {
+                        // Generate symbol for next result and bind to `false` (default)
+                        let next = self.kb.read().unwrap().gensym("next_value");
+                        self.bind(&next, Term::new_temporary(Value::Boolean(false)));
+                        let next_term = Term::new_temporary(Value::Variable(next.clone()));
+                        let call_id = self.new_call_id(&next);
+
+                        // append unify goal to be evaluated after
+                        // next result is fetched
+                        self.append_goals(vec![
+                            Goal::NextExternal {
+                                call_id,
+                                term: self.deep_deref(&list),
+                            },
+                            Goal::Unify {
+                                left: next_term,
+                                right: item.clone(),
+                            },
+                        ])?;
+                    }
                     _ => {
                         return Err(self.type_error(
                             &list,
@@ -1597,12 +1625,14 @@ impl PolarVirtualMachine {
                     })
                     .expect("bad lookup value");
                 let call_id = self.new_call_id(value);
-                self.push_goal(Goal::LookupExternal {
-                    call_id,
-                    instance: object.clone(),
-                    field,
-                    check_errors: true,
-                })?;
+                self.append_goals(vec![
+                    Goal::LookupExternal {
+                        call_id,
+                        field,
+                        instance: object.clone(),
+                    },
+                    Goal::CheckError,
+                ])?;
             }
             Value::Partial(partial) => {
                 let mut partial = partial.clone();
@@ -1769,10 +1799,10 @@ impl PolarVirtualMachine {
                 self.bind(&answer, Term::new_temporary(Value::Boolean(false)));
 
                 // append unify goal to be evaluated after external op result is returned & bound
-                self.append_goals(vec![Goal::Unify {
+                self.push_goal(Goal::Unify {
                     left: Term::new_temporary(Value::Variable(answer.clone())),
                     right: Term::new_temporary(Value::Boolean(true)),
-                }])?;
+                })?;
                 let call_id = self.new_call_id(&answer);
                 Ok(QueryEvent::ExternalOp {
                     call_id,
