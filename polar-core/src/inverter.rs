@@ -4,7 +4,7 @@ use crate::events::QueryEvent;
 use crate::kb::Bindings;
 use crate::runnable::Runnable;
 use crate::terms::Term;
-use crate::vm::{Goals, PolarVirtualMachine};
+use crate::vm::{BindingStack, Goals, PolarVirtualMachine};
 
 #[derive(Clone)]
 pub struct Inverter {
@@ -22,19 +22,53 @@ impl Inverter {
 }
 
 impl Runnable for Inverter {
-    fn run(&mut self, counter: Counter) -> PolarResult<QueryEvent> {
+    fn run(
+        &mut self,
+        bindings: Option<&mut BindingStack>,
+        mut counter: &mut Counter,
+    ) -> PolarResult<QueryEvent> {
+        eprintln!("[Inverter] BEFORE RUN: {:?}\n", bindings);
+
         loop {
             // Pass most events through, but collect results and invert them.
-            // FIXME: counter clone
-            if let Ok(event) = self.vm.run(counter.clone()) {
+            if let Ok(event) = self.vm.run(None, &mut counter) {
                 match event {
                     QueryEvent::Done { .. } => {
-                        return Ok(QueryEvent::Done {
-                            result: self.results.is_empty(),
-                        });
+                        eprintln!("[Inverter] DONE - RESULTS: {:?}\n", self.results);
+                        eprintln!("[Inverter] DONE - returning: {}\n", self.results.is_empty());
+
+                        let result = !self.results.is_empty();
+
+                        eprintln!("[Inverter] AFTER RUN: {:?}\n", bindings);
+
+                        let x = if let Some(parent_bindings) = bindings {
+                            // let inverter_bindings = self.results.drain(..).flat_map(|bindings| {
+                            //     bindings
+                            //         .into_iter()
+                            //         .map(|(k, v)| Binding(k, v))
+                            //         .collect::<BindingStack>()
+                            // });
+                            // parent_bindings.extend(inverter_bindings);
+
+                            parent_bindings.clear();
+                            parent_bindings.extend(self.vm.bindings.drain(..));
+                            parent_bindings.clone()
+                        } else {
+                            vec![]
+                        };
+
+                        eprintln!("[Inverter] AFTER MOVE: {:?}\n", x);
+
+                        return Ok(QueryEvent::Done { result });
                     }
-                    QueryEvent::Result { bindings, .. } => self.results.push(bindings),
-                    event => return Ok(event),
+                    QueryEvent::Result { bindings, .. } => {
+                        eprintln!("[Inverter] RESULT - BINDINGS: {:?}\n", bindings);
+                        self.results.push(bindings);
+                    }
+                    event => {
+                        eprintln!("[Inverter] {:?}\n", event);
+                        return Ok(event);
+                    }
                 }
             }
         }
