@@ -29,7 +29,9 @@ impl Runnable for Inverter {
             if let Ok(event) = self.vm.run(counter.clone()) {
                 match event {
                     QueryEvent::Done { .. } => {
-                        return Ok(QueryEvent::Done { result: self.results.is_empty() });
+                        return Ok(QueryEvent::Done {
+                            result: self.results.is_empty(),
+                        });
                     }
                     QueryEvent::Result { bindings, .. } => self.results.push(bindings),
                     event => return Ok(event),
