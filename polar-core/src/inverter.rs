@@ -2,6 +2,7 @@ use crate::counter::Counter;
 use crate::error::PolarResult;
 use crate::events::QueryEvent;
 use crate::folder::Folder;
+use crate::kb::Bindings;
 use crate::partial::Constraints;
 use crate::runnable::Runnable;
 use crate::terms::{Operation, Operator, Term, Value};
@@ -10,14 +11,14 @@ use crate::vm::{Binding, BindingStack, Goals, PolarVirtualMachine};
 #[derive(Clone)]
 pub struct Inverter {
     vm: PolarVirtualMachine,
-    result: bool,
+    results: Vec<Bindings>,
 }
 
 impl Inverter {
     pub fn new(vm: &PolarVirtualMachine, goals: Goals) -> Self {
         Self {
             vm: vm.clone_with_bindings(goals),
-            result: true,
+            results: vec![],
         }
     }
 }
@@ -92,7 +93,15 @@ impl Runnable for Inverter {
             if let Ok(event) = self.vm.run(None, None, None) {
                 match event {
                     QueryEvent::Done { .. } => {
-                        if !self.result {
+                        if !self.results.is_empty() {
+                            eprintln!("{:?}", self.results);
+                            let inverted_results = self.results.into_iter().map(|result| {
+                                let mut inverter = ConstraintInverter::new();
+                                result.into_iter().for_each(|Binding(_, value)| {
+                                    inverter.fold_term(value);
+                                });
+                            });
+
                             if let Some(parent_bindings) = bindings {
                                 let bsp = bsp.expect("Inverter needs a BSP");
                                 let mut inverter = ConstraintInverter::new();
@@ -111,7 +120,9 @@ impl Runnable for Inverter {
                             result: self.result,
                         });
                     }
-                    QueryEvent::Result { .. } => self.result = false,
+                    QueryEvent::Result { bindings, .. } => {
+                        self.results.push(bindings);
+                    }
                     event => return Ok(event),
                 }
             }
