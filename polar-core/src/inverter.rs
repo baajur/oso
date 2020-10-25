@@ -4,6 +4,7 @@ use crate::counter::Counter;
 use crate::error::PolarResult;
 use crate::events::QueryEvent;
 use crate::folder::Folder;
+use crate::formatting::ToPolarString;
 use crate::kb::Bindings;
 use crate::partial::Constraints;
 use crate::runnable::Runnable;
@@ -13,7 +14,7 @@ use crate::vm::{Binding, BindingStack, Goals, PolarVirtualMachine};
 #[derive(Clone)]
 pub struct Inverter {
     vm: PolarVirtualMachine,
-    results: Vec<Bindings>,
+    results: Vec<BindingStack>,
 }
 
 impl Inverter {
@@ -90,20 +91,21 @@ impl Runnable for Inverter {
         bsp: Option<&mut usize>,
         _: Option<&mut Counter>,
     ) -> PolarResult<QueryEvent> {
+        let bsp = bsp.expect("Inverter needs a BSP");
         loop {
             // Pass most events through, but collect results and invert them.
             if let Ok(event) = self.vm.run(None, None, None) {
                 match event {
                     QueryEvent::Done { .. } => {
                         let result = !self.results.is_empty();
+                        eprintln!("NUMBER OF RESULTS: {}", self.results.len());
                         if result {
-                            eprintln!("{:?}", self.results);
                             let new_bindings: BindingStack = self
                                 .results
                                 .iter()
                                 .map(|result| {
                                     let mut inverter = ConstraintInverter::new();
-                                    result.iter().for_each(|(_, value)| {
+                                    result.iter().for_each(|Binding(_, value)| {
                                         inverter.fold_term(value.clone());
                                     });
                                     inverter.new_bindings
@@ -116,19 +118,24 @@ impl Runnable for Inverter {
                                                 if let Value::Partial(existing) = existing.value() {
                                                     if let Ok(new) = value.value().as_partial() {
                                                         assert_eq!(existing.variable, new.variable);
+                                                        eprintln!("EXISTING CONSTRAINTS: {}\n{:?}\n\nNEW CONSTRAINTS: {}\n{:?}",
+                                                            existing.operations.iter().map(|o| o.to_polar()).collect::<Vec<String>>().join(","), existing.operations,
+                                                            new.operations.iter().map(|o| o.to_polar()).collect::<Vec<String>>().join(","), new.operations
+                                                            );
                                                         let conjunction = value.clone_with_value(
                                                             Value::Partial(Constraints {
                                                                 variable: existing.variable.clone(),
-                                                                operations: existing
-                                                                    .operations
-                                                                    .iter()
-                                                                    .cloned()
-                                                                    .chain(
-                                                                        new.operations
-                                                                            .iter()
-                                                                            .cloned(),
-                                                                    )
-                                                                    .collect(),
+                                                                operations: new.operations.clone(),
+                                                                // operations: existing
+                                                                //     .operations
+                                                                //     .iter()
+                                                                //     .cloned()
+                                                                //     .chain(
+                                                                //         new.operations
+                                                                //             .iter()
+                                                                //             .cloned(),
+                                                                //     )
+                                                                //     .collect(),
                                                             }),
                                                         );
                                                         o.insert(conjunction);
@@ -151,14 +158,14 @@ impl Runnable for Inverter {
                                 .collect();
 
                             if let Some(parent_bindings) = bindings {
-                                let bsp = bsp.expect("Inverter needs a BSP");
                                 *bsp += new_bindings.len();
                                 parent_bindings.extend(new_bindings);
                             }
                         }
                         return Ok(QueryEvent::Done { result });
                     }
-                    QueryEvent::Result { bindings, .. } => {
+                    QueryEvent::Result { .. } => {
+                        let bindings = self.vm.bindings[*bsp..].to_owned();
                         self.results.push(bindings);
                     }
                     event => return Ok(event),
