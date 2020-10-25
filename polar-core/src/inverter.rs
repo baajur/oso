@@ -1,4 +1,4 @@
-use std::collections::hash_map::Entry;
+use std::collections::{hash_map::Entry, HashSet};
 
 use crate::counter::Counter;
 use crate::error::PolarResult;
@@ -8,7 +8,7 @@ use crate::formatting::ToPolarString;
 use crate::kb::Bindings;
 use crate::partial::Constraints;
 use crate::runnable::Runnable;
-use crate::terms::{Operation, Operator, Term, Value};
+use crate::terms::{Operation, Operator, Symbol, Term, Value};
 use crate::vm::{Binding, BindingStack, Goals, PolarVirtualMachine};
 
 #[derive(Clone)]
@@ -111,7 +111,14 @@ impl Runnable for Inverter {
                                     inverter.new_bindings
                                 })
                                 .fold(Bindings::new(), |mut acc, bindings| {
-                                    for Binding(var, value) in bindings {
+                                    let mut seen = HashSet::<Symbol>::new();
+                                    for Binding(var, value) in bindings.into_iter().rev() {
+                                        if seen.contains(&var) {
+                                            continue;
+                                        } else {
+                                            seen.insert(var.clone());
+                                        }
+
                                         match acc.entry(var) {
                                             Entry::Occupied(mut o) => {
                                                 let existing = o.get();
@@ -125,20 +132,20 @@ impl Runnable for Inverter {
                                                         let conjunction = value.clone_with_value(
                                                             Value::Partial(Constraints {
                                                                 variable: existing.variable.clone(),
-                                                                operations: new.operations.clone(),
-                                                                // operations: existing
-                                                                //     .operations
-                                                                //     .iter()
-                                                                //     .cloned()
-                                                                //     .chain(
-                                                                //         new.operations
-                                                                //             .iter()
-                                                                //             .cloned(),
-                                                                //     )
-                                                                //     .collect(),
+                                                                operations: existing
+                                                                    .operations
+                                                                    .iter()
+                                                                    .cloned()
+                                                                    .chain(
+                                                                        new.operations
+                                                                            .iter()
+                                                                            .cloned(),
+                                                                    )
+                                                                    .collect(),
                                                             }),
                                                         );
                                                         o.insert(conjunction);
+                                                        break;
                                                     } else {
                                                         unreachable!();
                                                     }
