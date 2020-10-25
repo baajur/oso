@@ -43,8 +43,8 @@ impl Query {
         let runnable = self.runnable_stack.last_mut();
         let bindings = &mut self.vm.bindings;
         let result = if let Some(runnable) = runnable {
-            let second_to_last = self.vm.choices.len() - 2;
-            let bsp = self.vm.choices.get_mut(second_to_last).map(|c| &mut c.bsp);
+            let i = self.vm.choices.len() - 2; // Noop for Not
+            let bsp = self.vm.choices.get_mut(i).map(|c| &mut c.bsp);
             runnable
                 .0
                 .as_mut()

@@ -604,15 +604,15 @@ mod test {
                i(x) if not (x = 1 or x = 2);"#,
         )?;
 
-        // let mut query =
-        //     polar.new_query_from_term(term!(call!("f", [Constraints::new(sym!("a"))])), false);
-        // let next = next_binding(&mut query)?;
-        // assert_partial_expression!(next, "a", "_this != 1");
-        //
-        // let mut query =
-        //     polar.new_query_from_term(term!(call!("g", [Constraints::new(sym!("a"))])), false);
-        // let next = next_binding(&mut query)?;
-        // assert_partial_expression!(next, "a", "_this <= 1");
+        let mut query =
+            polar.new_query_from_term(term!(call!("f", [Constraints::new(sym!("a"))])), false);
+        let next = next_binding(&mut query)?;
+        assert_partial_expression!(next, "a", "_this != 1");
+
+        let mut query =
+            polar.new_query_from_term(term!(call!("g", [Constraints::new(sym!("a"))])), false);
+        let next = next_binding(&mut query)?;
+        assert_partial_expression!(next, "a", "_this <= 1");
 
         let mut query =
             polar.new_query_from_term(term!(call!("h", [Constraints::new(sym!("a"))])), false);

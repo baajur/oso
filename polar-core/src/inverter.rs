@@ -4,7 +4,6 @@ use crate::counter::Counter;
 use crate::error::PolarResult;
 use crate::events::QueryEvent;
 use crate::folder::Folder;
-use crate::formatting::ToPolarString;
 use crate::kb::Bindings;
 use crate::partial::Constraints;
 use crate::runnable::Runnable;
@@ -97,9 +96,8 @@ impl Runnable for Inverter {
             if let Ok(event) = self.vm.run(None, None, None) {
                 match event {
                     QueryEvent::Done { .. } => {
-                        let result = !self.results.is_empty();
-                        eprintln!("NUMBER OF RESULTS: {}", self.results.len());
-                        if result {
+                        let mut result = self.results.is_empty();
+                        if !result {
                             let new_bindings: BindingStack = self
                                 .results
                                 .iter()
@@ -125,10 +123,6 @@ impl Runnable for Inverter {
                                                 if let Value::Partial(existing) = existing.value() {
                                                     if let Ok(new) = value.value().as_partial() {
                                                         assert_eq!(existing.variable, new.variable);
-                                                        eprintln!("EXISTING CONSTRAINTS: {}\n{:?}\n\nNEW CONSTRAINTS: {}\n{:?}",
-                                                            existing.operations.iter().map(|o| o.to_polar()).collect::<Vec<String>>().join(","), existing.operations,
-                                                            new.operations.iter().map(|o| o.to_polar()).collect::<Vec<String>>().join(","), new.operations
-                                                            );
                                                         let conjunction = value.clone_with_value(
                                                             Value::Partial(Constraints {
                                                                 variable: existing.variable.clone(),
@@ -164,9 +158,12 @@ impl Runnable for Inverter {
                                 .map(|(var, value)| Binding(var, value))
                                 .collect();
 
-                            if let Some(parent_bindings) = bindings {
-                                *bsp += new_bindings.len();
-                                parent_bindings.extend(new_bindings);
+                            if let Some(bindings) = bindings {
+                                if !new_bindings.is_empty() {
+                                    *bsp += new_bindings.len();
+                                    bindings.extend(new_bindings);
+                                    result = true;
+                                }
                             }
                         }
                         return Ok(QueryEvent::Done { result });
